@@ -45,14 +45,25 @@ router.get('/', auth.optional, function(req, res, next) {
     query.tagList = {"$in" : [req.query.tag]};
   }
 
+  // promises use callbacks very liberally
+  // it's for when you don't know what a value is
+  // but it'll be defined later on for you to use
+  // it's for when you don't want your code to be blocking
+  // the way the application knows the data is ready is
+  // with a callback by the promise
+  // it guarantees you get a resolved value you can use or an error that will be informative
   Promise.all([
-    req.query.author ? User.findOne({username: req.query.author}) : null,
-    req.query.favorited ? User.findOne({username: req.query.favorited}) : null
-  ]).then(function(results){
+    // if it's a database query it has to be async
+    // query looks like this:
+    // { author: jake, favorites: jake }
+    req.query.author ? User.findOne({ username: req.query.author }) : null, // returns jake, or null
+    req.query.favorited ? User.findOne({ username: req.query.favorited }) : null // returns favorites, or null
+  ]).then(function (results) {
     var author = results[0];
     var favoriter = results[1];
 
-    if(author){
+    if (author) {
+      // query = { author: DEADBEEF }
       query.author = author._id;
     }
 
@@ -63,13 +74,17 @@ router.get('/', auth.optional, function(req, res, next) {
     }
 
     return Promise.all([
+
+      // another db lookup
       Article.find(query)
         .limit(Number(limit))
         .skip(Number(offset))
         .sort({createdAt: 'desc'})
         .populate('author')
-        .exec(),
+        .exec(), // mongoose query thing, another way of doing callbacks, https://stackoverflow.com/questions/31549857/mongoose-what-does-the-exec-function-do
       Article.count(query).exec(),
+      // payload is the main body of the req
+      // we need the user id to get the articles written by that user
       req.payload ? User.findById(req.payload.id) : null,
     ]).then(function(results){
       var articles = results[0];
@@ -83,7 +98,9 @@ router.get('/', auth.optional, function(req, res, next) {
         articlesCount: articlesCount
       });
     });
-  }).catch(next);
+  }).catch(next); // promises are resolving in chain 
+  // as long as you return something from a promise, you can keep chaining `then`s, or you can stop and do something with data
+  // ideally if any errors occur above, the catch will get called and do something to handle the error
 });
 
 router.get('/feed', auth.required, function(req, res, next) {
@@ -194,19 +211,39 @@ router.delete('/:article', auth.required, function(req, res, next) {
 });
 
 // Favorite an article
-router.post('/:article/favorite', auth.required, function(req, res, next) {
+
+
+const postSpan = beeline.startSpan();
+postSpan.addField({ req: req });
+router.post('/:article/favorite', auth.required, function (req, res, next) {
+  // the response object is a parameter and there are functions we can call on it
+  // usually see res.json or res.text
+  // express's middleware is handling response object under the hood
+
   var articleId = req.article._id;
 
   User.findById(req.payload.id).then(function(user){
     if (!user) { return res.sendStatus(401); }
 
-    return user.favorite(articleId).then(function(){
-      return req.article.updateFavoriteCount().then(function(article){
-        return res.json({article: article.toJSONFor(user)});
+    // def favorite
+    //   if user.favorite(article_id) do
+    //     if req.article.updateFavoriteCount() do
+    //       return res.json
+    //     end 
+    //   end
+    // end 
+    return user.favorite(articleId)
+      .then(function () {
+        return req.article.updateFavoriteCount()
+          .then(function (article) {
+            return res.json({ article: article.toJSONFor(user) });
+          });
       });
-    });
-  }).catch(next);
+  }).catch(next); // next is the next function. if there's an error, do whatever's supposed to come next
+  // a callback is a function, it's not a separate thing. it's called that because of when it takes place
+  // a promise comes before callbacks
 });
+postSpan.finishSpan();
 
 // Unfavorite an article
 router.delete('/:article/favorite', auth.required, function(req, res, next) {
@@ -236,10 +273,12 @@ router.get('/:article/comments', auth.optional, function(req, res, next){
           createdAt: 'desc'
         }
       }
-    }).execPopulate().then(function(article) {
-      return res.json({comments: req.article.comments.map(function(comment){
-        return comment.toJSONFor(user);
-      })});
+    }).execPopulate().then(function (article) {
+      return res.json({
+        comments: req.article.comments.map(function (comment) {
+          return comment.toJSONFor(user);
+        })
+      });
     });
   }).catch(next);
 });
